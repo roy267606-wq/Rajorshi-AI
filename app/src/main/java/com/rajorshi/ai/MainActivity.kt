@@ -158,16 +158,20 @@ fun RajorshiAIScreen() {
 }
 
 suspend fun askGroqAI(prompt: String, apiKey: String): String = withContext(Dispatchers.IO) {
-    if (apiKey == "YOUR_GROQ_API_KEY" || apiKey.isBlank()) {
+    val cleanKey = apiKey.trim()
+    if (cleanKey == "YOUR_GROQ_API_KEY" || cleanKey.isBlank()) {
         return@withContext "দয়া করে কোডের ভেতরে আপনার ফ্রি Groq API Key যুক্ত করুন।"
     }
     try {
         val url = URL("https://groq.com")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+        conn.setRequestProperty("Accept", "application/json")
+        conn.setRequestProperty("User-Agent", "RajorshiAI-Android")
+        conn.setRequestProperty("Authorization", "Bearer $cleanKey")
         conn.doOutput = true
+        conn.doInput = true
 
         val msgObj = JSONObject()
             .put("role", "user")
@@ -176,11 +180,14 @@ suspend fun askGroqAI(prompt: String, apiKey: String): String = withContext(Disp
             .put("model", "llama-3.3-70b-versatile")
             .put("messages", JSONArray().put(msgObj))
 
-        OutputStreamWriter(conn.outputStream).use { it.write(bodyObj.toString()) }
+        OutputStreamWriter(conn.outputStream, "UTF-8").use {
+            it.write(bodyObj.toString())
+            it.flush()
+        }
 
         val responseCode = conn.responseCode
         val stream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
-        val responseText = stream.bufferedReader().use { it.readText() }
+        val responseText = stream?.bufferedReader()?.use { it.readText() } ?: ""
 
         if (responseCode in 200..299) {
             val json = JSONObject(responseText)
@@ -190,7 +197,7 @@ suspend fun askGroqAI(prompt: String, apiKey: String): String = withContext(Disp
                 .getString("content")
                 .trim()
         } else {
-            "সার্ভার ত্রুটি ($responseCode): দয়া করে ইন্টারনেট কানেকশন বা API Key চেক করুন।"
+            "সার্ভার ত্রুটি ($responseCode): $responseText"
         }
     } catch (e: Exception) {
         "ত্রুটি হয়েছে: ${e.localizedMessage}"
