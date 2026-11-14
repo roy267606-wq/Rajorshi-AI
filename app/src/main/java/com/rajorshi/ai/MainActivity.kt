@@ -16,6 +16,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 data class ChatMessage(val text: String, val isFromUser: Boolean)
 
@@ -33,10 +41,13 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RajorshiAIScreen() {
+    val apiKey = "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"
     var inputText by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
     val messages = remember {
         mutableStateListOf(
-            ChatMessage("স্বাগতম! আমি Rajorshi AI। আজকে আপনাকে কীভাবে সাহায্য করতে পারি?", false)
+            ChatMessage("স্বাগতম! আমি Rajorshi AI। এখন আমাকে বাংলা বা ইংরেজিতে যেকোনো প্রশ্ন জিজ্ঞাসা করতে পারেন।", false)
         )
     }
 
@@ -89,6 +100,16 @@ fun RajorshiAIScreen() {
                         }
                     }
                 }
+                if (isLoading) {
+                    item {
+                        Text(
+                            text = "Rajorshi AI উত্তর তৈরি করছে...",
+                            color = Color.Gray,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+                }
             }
 
             Row(
@@ -101,7 +122,7 @@ fun RajorshiAIScreen() {
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
-                    placeholder = { Text("Rajorshi AI-কে কিছু জিজ্ঞাসা করুন...", color = Color.Gray) },
+                    placeholder = { Text("যেকোনো প্রশ্ন লিখুন...", color = Color.Gray) },
                     modifier = Modifier.weight(1f),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
@@ -114,12 +135,16 @@ fun RajorshiAIScreen() {
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = {
-                        if (inputText.isNotBlank()) {
+                        if (inputText.isNotBlank() && !isLoading) {
                             val userQuery = inputText.trim()
                             messages.add(ChatMessage(userQuery, true))
                             inputText = ""
-                            val reply = generateSmartReply(userQuery)
-                            messages.add(ChatMessage(reply, false))
+                            isLoading = true
+                            coroutineScope.launch {
+                                val reply = askGroqAI(userQuery, apiKey)
+                                messages.add(ChatMessage(reply, false))
+                                isLoading = false
+                            }
                         }
                     },
                     shape = RoundedCornerShape(24.dp),
@@ -132,16 +157,42 @@ fun RajorshiAIScreen() {
     }
 }
 
-fun generateSmartReply(query: String): String {
-    val q = query.lowercase()
-    return when {
-        q.contains("hi") || q.contains("hello") || q.contains("হ্যালো") || q.contains("কেমন আছ") ->
-            "হ্যালো! আমি Rajorshi AI, একদম ভালো আছি। আপনার কী প্রশ্ন আছে বলুন?"
-        q.contains("নাম") || q.contains("name") || q.contains("কে তুমি") ->
-            "আমার নাম Rajorshi AI। আমি আপনার ব্যক্তিগত অ্যান্ড্রয়েড অ্যাসিস্ট্যান্ট।"
-        q.contains("ধন্যবাদ") || q.contains("thanks") ->
-            "আপনাকেও অসংখ্য ধন্যবাদ! যেকোনো প্রয়োজনে আমাকে জিজ্ঞাসা করতে পারেন।"
-        else ->
-            "আপনি লিখেছেন: \"$query\"\n\nRajorshi AI সফলভাবে আপনার ফোনে ইনস্টল হয়েছে! পরবর্তী ভার্সনে এখানে আপনার পছন্দমতো API যুক্ত করে আরও উন্নত উত্তর পেতে পারবেন।"
+suspend fun askGroqAI(prompt: String, apiKey: String): String = withContext(Dispatchers.IO) {
+    if (apiKey == "YOUR_GROQ_API_KEY" || apiKey.isBlank()) {
+        return@withContext "দয়া করে কোডের ভেতরে আপনার ফ্রি Groq API Key যুক্ত করুন।"
+    }
+    try {
+        val url = URL("https://groq.com")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        conn.doOutput = true
+
+        val msgObj = JSONObject()
+            .put("role", "user")
+            .put("content", prompt)
+        val bodyObj = JSONObject()
+            .put("model", "llama-3.3-70b-versatile")
+            .put("messages", JSONArray().put(msgObj))
+
+        OutputStreamWriter(conn.outputStream).use { it.write(bodyObj.toString()) }
+
+        val responseCode = conn.responseCode
+        val stream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
+        val responseText = stream.bufferedReader().use { it.readText() }
+
+        if (responseCode in 200..299) {
+            val json = JSONObject(responseText)
+            json.getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+                .trim()
+        } else {
+            "সার্ভার ত্রুটি ($responseCode): দয়া করে ইন্টারনেট কানেকশন বা API Key চেক করুন।"
+        }
+    } catch (e: Exception) {
+        "ত্রুটি হয়েছে: ${e.localizedMessage}"
     }
 }
